@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from . import store, media
-from .cloud import Bailian, CloudError
+from .cloud import Bailian, DeepSeek, Compatible, CloudError, KEY_FIELDS
 
 ACTIVE = {}
 
@@ -14,6 +14,8 @@ def checkpoint(folder):
 
 def parse_json(raw):
     try:
+        if raw.strip().startswith("```") and raw.strip().endswith("```"):
+            raw = raw.strip().split("\n", 1)[1].rsplit("```", 1)[0].strip()
         obj = json.loads(raw)
         if not isinstance(obj, dict):
             raise ValueError()
@@ -28,7 +30,9 @@ async def process(task_id):
     folder.mkdir(exist_ok=True)
     cp = checkpoint(folder)
     config = store.settings()
-    client = Bailian(config)
+    client = {"deepseek": DeepSeek, "custom": Compatible, "bailian": Bailian}[
+        config.get("provider", "bailian")
+    ](config)
     result = (
         cp.get("_result")
         or task["result"]
@@ -95,7 +99,11 @@ async def process(task_id):
                 u["estimated_cny"] += seconds * config["asr_price_per_second"]
             else:
                 u["asr_cost_unknown"] = True
-        elif config["region"] == "beijing" and config["model"] == "qwen3.5-flash":
+        elif (
+            config.get("provider", "bailian") == "bailian"
+            and config["region"] == "beijing"
+            and config["model"] == "qwen3.5-flash"
+        ):
             multiplier = 1 if inp <= 128000 else 4 if inp <= 256000 else 6
             u["estimated_cny"] += (
                 (inp * config["input_price"] + out * config["output_price"])
@@ -109,8 +117,9 @@ async def process(task_id):
 
     store.update(task_id, status="running", error="")
     try:
-        if not config["api_key"]:
-            raise CloudError("请先在设置中填写百炼 API Key，再重试任务。")
+        key_field = KEY_FIELDS[config.get("provider", "bailian")]
+        if not config[key_field]:
+            raise CloudError("请先在设置中填写当前服务商的 API Key，再重试任务。")
         cookies = store.ROOT / "cookies.txt"
         cookies = cookies if cookies.exists() else None
         source = task["source"]

@@ -10,16 +10,6 @@ from backend.app import app, create_task
 from backend.cloud import Bailian, CloudError
 
 
-@pytest.fixture
-def isolated(tmp_path, monkeypatch):
-    monkeypatch.setattr(store, "ROOT", tmp_path)
-    with store.connect() as db:
-        db.execute(
-            "CREATE TABLE tasks (id TEXT PRIMARY KEY, source TEXT, title TEXT, status TEXT, stage TEXT, error TEXT, created TEXT, result TEXT)"
-        )
-    return tmp_path
-
-
 def test_settings_redaction_and_origin(isolated):
     client = TestClient(app)
     result = client.put("/api/settings", json={"api_key": "secret-test-key"}).json()

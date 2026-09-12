@@ -179,7 +179,7 @@ def parse_subtitle(path):
         return sum(v * 60**i for i, v in enumerate(reversed(nums)))
 
     for block in re.split(r"\n\s*\n", text):
-        m = re.search(r"([\d:.]+) --> ([\d:.]+)[^\n]*\n([\s\S]+)", block)
+        m = re.search(r"([\d:.,]+) --> ([\d:.,]+)[^\n]*\n([\s\S]+)", block)
         if m:
             segments.append(
                 dict(

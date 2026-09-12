@@ -852,6 +852,14 @@ footer .tiny-dot {
   margin-top: 20px;
   font-size: 12px;
 }
+.settings-divider {
+  margin: 24px 0 12px;
+  padding-top: 20px;
+  border-top: 1px solid #e3e9db;
+  font-size: 12px;
+  font-weight: 600;
+  color: #536d48;
+}
 @media (min-width: 1500px) {
   .landing {
     padding-top: 85px;

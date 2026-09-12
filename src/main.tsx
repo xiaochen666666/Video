@@ -61,12 +61,41 @@ type Task = {
   };
 };
 type Config = {
+  provider: "bailian" | "deepseek" | "custom";
+  deepseek_model: string;
+  custom_base_url: string;
+  custom_model: string;
+  custom_vision_model: string;
+  custom_json_mode: boolean;
+  asr_provider: "bailian" | "none" | "custom";
+  custom_asr_base_url: string;
+  custom_asr_model: string;
+  has_bailian_key: boolean;
+  has_deepseek_key: boolean;
+  has_custom_key: boolean;
+  has_custom_asr_key: boolean;
   region: string;
   model: string;
   asr_model: string;
   has_key: boolean;
   asr_price_per_second: number | null;
 };
+const providers = {
+  bailian: "阿里云百炼",
+  deepseek: "DeepSeek",
+  custom: "自定义兼容接口",
+};
+const keyFields = {
+  bailian: "api_key",
+  deepseek: "deepseek_api_key",
+  custom: "custom_api_key",
+};
+const configured = (c: Config) =>
+  c.provider === "deepseek"
+    ? c.has_deepseek_key
+    : c.provider === "custom"
+      ? c.has_custom_key
+      : c.has_bailian_key;
 async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const r = await fetch("/api" + path, options);
   if (!r.ok) {
@@ -106,6 +135,11 @@ function App() {
     [notice, setNotice] = useState(""),
     [error, setError] = useState("");
   const task = tasks.find((t) => t.id === selected);
+  const [asrKey, setAsrKey] = useState("");
+  const [savedConfig, setSavedConfig] = useState<Config | null>(null);
+  const settingsDirty = Boolean(
+    key || asrKey || JSON.stringify(config) !== JSON.stringify(savedConfig),
+  );
   const refresh = async () => {
     try {
       setTasks(await api<Task[]>("/tasks"));
@@ -116,7 +150,10 @@ function App() {
   useEffect(() => {
     refresh();
     api<Config>("/settings")
-      .then(setConfig)
+      .then((c) => {
+        setConfig(c);
+        setSavedConfig(c);
+      })
       .catch((e) => setError(e.message));
     const t = setInterval(refresh, 2000);
     return () => clearInterval(t);
@@ -205,10 +242,22 @@ function App() {
     await action(async () => {
       const c = await api<Config>("/settings", {
         method: "PUT",
-        ...json({ ...config, ...(key ? { api_key: key } : {}) }),
+        ...json({
+          ...config,
+          ...(key ? { [keyFields[config.provider]]: key } : {}),
+          ...(asrKey
+            ? {
+                [config.asr_provider === "custom"
+                  ? "custom_asr_api_key"
+                  : "api_key"]: asrKey,
+              }
+            : {}),
+        }),
       });
       setConfig(c);
+      setSavedConfig(c);
       setKey("");
+      setAsrKey("");
       setNotice("设置已保存");
     });
   }
@@ -296,8 +345,12 @@ function App() {
             <strong>{task ? "视频笔记" : "新建笔记"}</strong>
           </div>
           <button className="connection" onClick={() => setSettings(true)}>
-            <span className={config?.has_key ? "dot" : "dot offline"} />
-            {config?.has_key ? "百炼 API 已配置" : "配置云端模型"}
+            <span
+              className={config && configured(config) ? "dot" : "dot offline"}
+            />
+            {config && configured(config)
+              ? `${providers[config.provider]} 已配置`
+              : "配置云端模型"}
             <ArrowUpRight size={14} />
           </button>
         </header>
@@ -366,10 +419,10 @@ function App() {
                 </label>
               </div>
             </form>
-            {!config?.has_key && (
+            {(!config || !configured(config)) && (
               <button className="setup-hint" onClick={() => setSettings(true)}>
                 <span>
-                  <Settings2 size={15} /> 首次使用？配置百炼 API Key 即可开始
+                  <Settings2 size={15} /> 首次使用？选择服务商并配置 API Key
                 </span>
                 <ArrowRight size={15} />
               </button>
@@ -470,6 +523,31 @@ function App() {
                   <button disabled={busy} onClick={() => operation("retry")}>
                     继续处理
                   </button>
+                )}
+                {["paused", "cancelled"].includes(task.status) && (
+                  <label className="upload-label">
+                    <Upload size={14} /> 导入字幕
+                    <input
+                      type="file"
+                      accept=".srt,.vtt,.json3,.json"
+                      disabled={busy}
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        e.target.value = "";
+                        if (file)
+                          action(async () => {
+                            const body = new FormData();
+                            body.append("file", file);
+                            await api(`/tasks/${task.id}/subtitle`, {
+                              method: "POST",
+                              body,
+                            });
+                            await refresh();
+                            setNotice("字幕已导入，点击继续处理即可");
+                          });
+                      }}
+                    />
+                  </label>
                 )}
                 <button
                   aria-label="删除笔记"
@@ -619,7 +697,7 @@ function App() {
                   "（部分费用未计入）"}
                 <small>
                   语音 {Math.round(task.result.usage.audio_seconds)} 秒 ·
-                  估算供参考，以百炼账单为准
+                  估算供参考，以服务商账单为准
                 </small>
               </div>
             )}
@@ -657,54 +735,212 @@ function App() {
               </div>
             )}
             <p>
-              使用阿里云百炼分析字幕、关键画面和必要音频。密钥保存在本机后端，不会加入
-              Git 仓库。
+              选择
+              DeepSeek、百炼或自定义兼容接口。各服务商密钥独立保存在本机，不会加入
+              Git 仓库。视频字幕和关键画面会发送给所选服务商。
             </p>
             <label>
-              服务地域
+              文字与画面服务商
               <select
-                value={config.region}
-                onChange={(e) =>
-                  setConfig({ ...config, region: e.target.value })
-                }
+                value={config.provider}
+                onChange={(e) => {
+                  setConfig({
+                    ...config,
+                    provider: e.target.value as Config["provider"],
+                  });
+                  setKey("");
+                  setAsrKey("");
+                }}
               >
-                <option value="beijing">中国内地 · 北京（默认）</option>
-                <option value="singapore">国际 · 新加坡</option>
+                <option value="deepseek">DeepSeek</option>
+                <option value="bailian">阿里云百炼</option>
+                <option value="custom">自定义 OpenAI 兼容接口</option>
               </select>
             </label>
+            {config.provider === "custom" && (
+              <label>
+                API Base URL
+                <input
+                  placeholder="https://你的服务商/v1"
+                  value={config.custom_base_url}
+                  onChange={(e) =>
+                    setConfig({ ...config, custom_base_url: e.target.value })
+                  }
+                />
+                <small className="model-note">
+                  修改地址后必须重新填写 Key。接口需兼容 /chat/completions。
+                </small>
+              </label>
+            )}
+            {(config.provider === "bailian" ||
+              config.asr_provider === "bailian") && (
+              <label>
+                百炼服务地域
+                <select
+                  value={config.region}
+                  onChange={(e) =>
+                    setConfig({ ...config, region: e.target.value })
+                  }
+                >
+                  <option value="beijing">中国内地 · 北京（默认）</option>
+                  <option value="singapore">国际 · 新加坡</option>
+                </select>
+              </label>
+            )}
             <label>
-              API Key{" "}
+              {providers[config.provider]} API Key{" "}
               <span>
-                {config.has_key ? "已配置 · 留空保留现有密钥" : "尚未配置"}
+                {configured(config) ? "已配置 · 留空保留现有密钥" : "尚未配置"}
               </span>
               <input
                 type="password"
                 autoComplete="new-password"
-                placeholder="在此粘贴百炼 API Key"
+                placeholder={`在此粘贴${providers[config.provider]} API Key`}
                 value={key}
                 onChange={(e) => setKey(e.target.value)}
               />
             </label>
-            <div className="form-grid">
+            <label>
+              文字模型（须支持 JSON 输出）
+              <input
+                value={
+                  config.provider === "deepseek"
+                    ? config.deepseek_model
+                    : config.provider === "custom"
+                      ? config.custom_model
+                      : config.model
+                }
+                onChange={(e) =>
+                  setConfig({
+                    ...config,
+                    [config.provider === "deepseek"
+                      ? "deepseek_model"
+                      : config.provider === "custom"
+                        ? "custom_model"
+                        : "model"]: e.target.value,
+                  })
+                }
+              />
+            </label>
+            {config.provider === "deepseek" && (
+              <small className="model-note">
+                默认 deepseek-flash
+                可处理文字与图片。若使用其他模型，请确认其图片输入能力；第三方平台提供的
+                DeepSeek Key 请使用“自定义兼容接口”。
+              </small>
+            )}
+            {config.provider === "custom" && (
+              <>
+                <label>
+                  视觉模型（留空使用文字模型）
+                  <input
+                    value={config.custom_vision_model}
+                    placeholder="需支持 image_url 图片输入"
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        custom_vision_model: e.target.value,
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  结构化输出参数
+                  <select
+                    value={config.custom_json_mode ? "on" : "off"}
+                    onChange={(e) =>
+                      setConfig({
+                        ...config,
+                        custom_json_mode: e.target.value === "on",
+                      })
+                    }
+                  >
+                    <option value="on">发送 JSON 模式参数（推荐）</option>
+                    <option value="off">仅用提示词约束 JSON（兼容模式）</option>
+                  </select>
+                </label>
+              </>
+            )}
+            <div className="settings-divider">无字幕时的语音转写</div>
+            <label>
+              语音接口
+              <select
+                value={config.asr_provider}
+                onChange={(e) => {
+                  setConfig({
+                    ...config,
+                    asr_provider: e.target.value as Config["asr_provider"],
+                  });
+                  setAsrKey("");
+                }}
+              >
+                <option value="none">不启用 · 手动导入字幕</option>
+                <option value="bailian">阿里云百炼语音</option>
+                <option value="custom">自定义兼容语音接口</option>
+              </select>
+            </label>
+            {config.asr_provider === "custom" && (
               <label>
-                文字与视觉模型
+                语音 API Base URL
                 <input
-                  value={config.model}
+                  value={config.custom_asr_base_url}
+                  placeholder="https://你的语音服务商/v1"
                   onChange={(e) =>
-                    setConfig({ ...config, model: e.target.value })
+                    setConfig({
+                      ...config,
+                      custom_asr_base_url: e.target.value,
+                    })
                   }
                 />
+                <small className="model-note">
+                  需兼容 multipart /audio/transcriptions，修改地址需重新填写
+                  Key。
+                </small>
               </label>
+            )}
+            {config.asr_provider !== "none" &&
+              (config.asr_provider === "custom" ||
+                config.provider !== "bailian") && (
+                <label>
+                  独立语音 API Key
+                  <span>
+                    {(
+                      config.asr_provider === "custom"
+                        ? config.has_custom_asr_key
+                        : config.has_bailian_key
+                    )
+                      ? "已配置 · 留空保留"
+                      : "尚未配置"}
+                  </span>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={asrKey}
+                    placeholder="语音服务商的 Key，不会复用文字服务商密钥"
+                    onChange={(e) => setAsrKey(e.target.value)}
+                  />
+                </label>
+              )}
+            {config.asr_provider !== "none" && (
               <label>
                 语音识别模型
                 <input
-                  value={config.asr_model}
+                  value={
+                    config.asr_provider === "custom"
+                      ? config.custom_asr_model
+                      : config.asr_model
+                  }
                   onChange={(e) =>
-                    setConfig({ ...config, asr_model: e.target.value })
+                    setConfig({
+                      ...config,
+                      [config.asr_provider === "custom"
+                        ? "custom_asr_model"
+                        : "asr_model"]: e.target.value,
+                    })
                   }
                 />
               </label>
-            </div>
+            )}
             <label>
               语音估算单价（元 / 秒，可选）
               <input
@@ -746,12 +982,12 @@ function App() {
               </button>
             </div>
             <small className="model-note">
-              默认模型价格核对于 2026-09-12。连接测试会产生少量 API
-              用量；请先保存设置。
+              仅内置百炼默认模型的费用估算；其他模型记录用量并标记费用未计入。连接测试会产生少量
+              API 用量，请先保存设置。
             </small>
             <div className="modal-actions">
               <button
-                disabled={busy || !config.has_key}
+                disabled={busy || !configured(config) || settingsDirty}
                 onClick={() =>
                   action(async () => {
                     const r = await api<{ message: string }>("/settings/test", {
@@ -761,7 +997,21 @@ function App() {
                   })
                 }
               >
-                测试连接
+                测试文字
+              </button>
+              <button
+                disabled={busy || !configured(config) || settingsDirty}
+                onClick={() =>
+                  action(async () => {
+                    const r = await api<{ message: string }>(
+                      "/settings/test?kind=vision",
+                      { method: "POST" },
+                    );
+                    setNotice(r.message);
+                  })
+                }
+              >
+                测试画面
               </button>
               <button className="primary" disabled={busy} onClick={save}>
                 {busy ? (

@@ -1,5 +1,6 @@
 import asyncio
 import io
+import math
 import shutil
 import uuid
 import zipfile
@@ -7,12 +8,14 @@ from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+from typing import Literal
+from PIL import Image, ImageDraw
 from fastapi import FastAPI, HTTPException, UploadFile, File, Request
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from . import store, worker, media
-from .cloud import Bailian, CloudError
+from .cloud import get_client, CloudError, normalize_base, SECRET_FIELDS, KEY_FIELDS
 
 
 @asynccontextmanager
@@ -44,6 +47,18 @@ async def local_only(request: Request, call_next):
 
 
 class Settings(BaseModel):
+    provider: str = "bailian"
+    deepseek_model: str = Field(default="deepseek-flash", min_length=1, max_length=100)
+    deepseek_api_key: str | None = None
+    custom_base_url: str = ""
+    custom_model: str = Field(default="", max_length=100)
+    custom_vision_model: str = Field(default="", max_length=100)
+    custom_api_key: str | None = None
+    custom_json_mode: bool = True
+    asr_provider: str = "bailian"
+    custom_asr_base_url: str = ""
+    custom_asr_model: str = Field(default="whisper-1", min_length=1, max_length=100)
+    custom_asr_api_key: str | None = None
     region: str = "beijing"
     model: str = Field(default="qwen3.5-flash", min_length=1, max_length=100)
     asr_model: str = Field(default="qwen3-asr-flash", min_length=1, max_length=100)
@@ -54,32 +69,78 @@ class Settings(BaseModel):
 @app.get("/api/settings")
 def read_settings():
     config = store.settings()
-    configured = bool(config.pop("api_key"))
-    return config | {"has_key": configured}
+    flags = {field: bool(config.pop(field, "")) for field in SECRET_FIELDS}
+    return config | {
+        "has_key": flags[KEY_FIELDS[config["provider"]]],
+        "has_bailian_key": flags["api_key"],
+        "has_deepseek_key": flags["deepseek_api_key"],
+        "has_custom_key": flags["custom_api_key"],
+        "has_custom_asr_key": flags["custom_asr_api_key"],
+    }
 
 
 @app.put("/api/settings")
 def put_settings(body: Settings):
     if body.region not in ("beijing", "singapore"):
         raise HTTPException(400, "不支持的地域")
+    if body.provider not in ("bailian", "deepseek", "custom"):
+        raise HTTPException(400, "不支持的服务商")
+    if body.asr_provider not in ("bailian", "none", "custom"):
+        raise HTTPException(400, "不支持的语音接口类型")
     config = store.settings()
-    changes = body.model_dump(exclude={"api_key"})
-    if body.api_key is not None:
-        changes["api_key"] = body.api_key.strip()
+    changes = body.model_dump(exclude=set(SECRET_FIELDS), exclude_unset=True)
+    for field in SECRET_FIELDS:
+        value = getattr(body, field)
+        if value is not None:
+            changes[field] = value.strip()
+    for base, key in [
+        ("custom_base_url", "custom_api_key"),
+        ("custom_asr_base_url", "custom_asr_api_key"),
+    ]:
+        if base in changes:
+            try:
+                changes[base] = normalize_base(changes[base]) if changes[base] else ""
+            except ValueError as e:
+                raise HTTPException(400, str(e)) from None
+            if changes[base] != config[base] and key not in changes:
+                changes[key] = (
+                    ""  # A saved credential never follows an edited destination.
+                )
+    merged = config | changes
+    if merged["provider"] == "custom" and (
+        not merged["custom_base_url"] or not merged["custom_model"].strip()
+    ):
+        raise HTTPException(400, "请填写自定义 API 地址和文字模型。")
+    if merged["asr_provider"] == "custom" and not merged["custom_asr_base_url"]:
+        raise HTTPException(400, "请填写语音 API 地址。")
     store.write_json(store.ROOT / "settings.json", config | changes)
     return read_settings()
 
 
 @app.post("/api/settings/test")
-async def test_settings():
+async def test_settings(kind: Literal["text", "vision"] = "text"):
+    image_path = None
     try:
-        await Bailian().analyze('返回 {"ok":true}')
+        config = store.settings()
+        client = get_client(config)
+        if kind == "vision":
+            image_path = store.ROOT / f"connection-{uuid.uuid4().hex}.jpg"
+            image = Image.new("RGB", (128, 128), "white")
+            ImageDraw.Draw(image).rectangle((24, 24, 104, 104), fill="red")
+            image.save(image_path)
+        await client.analyze(
+            '返回 JSON：{"ok":true}。如果提供了图片，请在 color 字段填写图片中方块的颜色。',
+            [image_path] if image_path else [],
+        )
         return {
             "ok": True,
-            "message": "文字模型连接成功。画面和语音能力将在任务中验证。",
+            "message": f"{'画面' if kind == 'vision' else '文字'}接口调用成功。实际总结质量请在视频任务中验证。",
         }
     except CloudError as e:
         raise HTTPException(400, str(e)) from None
+    finally:
+        if image_path:
+            image_path.unlink(missing_ok=True)
 
 
 @app.post("/api/cookies")
@@ -192,6 +253,55 @@ def require_task(task_id):
     if not task:
         raise HTTPException(404, "任务不存在")
     return task
+
+
+@app.post("/api/tasks/{task_id}/subtitle")
+async def import_subtitle(task_id: str, file: UploadFile = File(...)):
+    task = require_task(task_id)
+    if task["status"] not in ("paused", "cancelled"):
+        raise HTTPException(409, "请先取消任务，再导入字幕；已完成的任务请重新创建。")
+    suffix = Path(file.filename or "").suffix.lower()
+    if suffix not in (".srt", ".vtt", ".json3", ".json"):
+        raise HTTPException(400, "支持 SRT、VTT、JSON3 和 B站 JSON 字幕。")
+    data = await file.read(2 * 1024 * 1024 + 1)
+    if len(data) > 2 * 1024 * 1024:
+        raise HTTPException(413, "字幕文件最大 2 MB。")
+    # Recheck after awaiting upload; another request may have resumed the task.
+    task = require_task(task_id)
+    if task["status"] not in ("paused", "cancelled"):
+        raise HTTPException(409, "任务已恢复，请先取消任务。")
+    folder = store.ROOT / task_id
+    folder.mkdir(exist_ok=True)
+    path = folder / ("imported" + suffix)
+    try:
+        path.write_bytes(data)
+        segments = media.parse_subtitle(path)
+        valid = segments and all(
+            isinstance(s["text"], str)
+            and math.isfinite(s["start"])
+            and math.isfinite(s["end"])
+            and 0 <= s["start"] < s["end"]
+            for s in segments
+        )
+        if not valid:
+            raise ValueError()
+    except (ValueError, KeyError, TypeError, UnicodeError):
+        raise HTTPException(
+            400, "字幕格式或时间戳无效，请使用 UTF-8 编码的字幕文件。"
+        ) from None
+    finally:
+        path.unlink(missing_ok=True)
+    old = worker.checkpoint(folder)
+    result = {
+        k: v
+        for k, v in task["result"].items()
+        if k in ("usage", "elapsed_seconds", "meta")
+    }
+    cp = {k: v for k, v in old.items() if k in ("meta", "frames", "subtitle_choice")}
+    cp.update(segments=sorted(segments, key=lambda s: s["start"]), _result=result)
+    store.write_json(folder / "checkpoint.json", cp)
+    store.update(task_id, result=result, error="", stage="字幕已导入，请点击继续处理")
+    return require_task(task_id)
 
 
 @app.get("/api/tasks/{task_id}")
