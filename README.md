@@ -11,18 +11,9 @@
 
 小工具
 
-## 拾帧 · 视频笔记
-
 Windows 本机网页，通过 DeepSeek、阿里云百炼或自定义 OpenAI 兼容 API 把 B站 / YouTube 视频整理成中文笔记。先给文字速览，再补全 PPT、图表和操作画面相关的章节说明。
 
-## 📚 目录
-
-> 点击标题展开对应内容。
-
-<details>
-<summary><strong>多服务商接入</strong></summary>
-
-### 多服务商接入
+## 多服务商接入
 
 “模型与设置”中可选择以下接入方式，各自保存密钥，切换后无需重新填写已有配置：
 
@@ -40,12 +31,7 @@ JSON 模式参数默认开启；不支持 `response_format` 的兼容服务可�
 
 保存后可分别点击“测试文字”和“测试画面”。两者均进行真实调用，可能产生少量费用；不代表真实视频总结质量已经验证。
 
-</details>
-
-<details>
-<summary><strong>独立语音接口与字幕导入</strong></summary>
-
-### 独立语音接口与字幕导入
+## 独立语音接口与字幕导入
 
 语音转写与文字/图片服务商独立选择：
 
@@ -55,12 +41,7 @@ JSON 模式参数默认开启；不支持 `response_format` 的兼容服务可�
 
 暂停或取消的任务中可点击“导入字幕”，支持 UTF-8 SRT、VTT、JSON3 和 B站 JSON（最大 2 MB），再点击“继续处理”。导入新字幕会清除该任务旧的文字/画面分析检查点，保留视频信息、关键帧和已有用量，避免旧字幕笔记混入新结果。已完成任务需先删除后重新创建。
 
-</details>
-
-<details>
-<summary><strong>启动</strong></summary>
-
-### 启动
+## 启动
 
 需要 Python 3.12 和 Node.js 20.14 或以上。在项目目录双击 **`start.bat`**，或运行：
 
@@ -70,12 +51,7 @@ JSON 模式参数默认开启；不支持 `response_format` 的兼容服务可�
 
 首次启动会安装 Python 环境、前端依赖及独立 Deno，并构建网页。FFmpeg 随 `imageio-ffmpeg` 安装，无需修改系统 PATH。打开 **http://127.0.0.1:8765**，关闭终端或按 Ctrl+C 停止服务。后续启动会检查依赖并重新构建前端。
 
-</details>
-
-<details>
-<summary><strong>配置百炼（可选接入方式）</strong></summary>
-
-### 配置百炼（可选接入方式）
+## 配置百炼（可选接入方式）
 
 1. 在 [阿里云百炼控制台](https://bailian.console.aliyun.com/) 开通模型服务、创建 API Key，并确保账户有可用额度。
 2. 点击网页的“模型与设置”。默认地域为北京，文字和视觉模型为 `qwen3.5-flash`，语音模型为 `qwen3-asr-flash`。
@@ -84,12 +60,7 @@ JSON 模式参数默认开启；不支持 `response_format` 的兼容服务可�
 
 北京与新加坡的 Key 不通用。默认使用百炼兼容接口公共域名；[官方文档](https://help.aliyun.com/zh/model-studio/qwen-asr-api-reference)说明现有域名仍可正常使用。密钥只存在被 Git 忽略的 `data/settings.json`，设置读取接口仅返回是否配置，不返回完整 Key。
 
-</details>
-
-<details>
-<summary><strong>使用方式</strong></summary>
-
-### 使用方式
+## 使用方式
 
 - 默认单条视频，支持指定 B站分P，例如 `?p=2`。YouTube 播放列表里的视频只处理该条。第一版不处理直播或批量播放列表。
 - 优先取原语言人工字幕，其次自动字幕；没有字幕时按静音切成最多 30 秒音频，由云端转写。音频时间戳是片段边界，不是逐句对齐。
@@ -101,23 +72,13 @@ JSON 模式参数默认开启；不支持 `response_format` 的兼容服务可�
 
 适合 10–60 分钟视频；上限 4 小时，本地上传最大 2 GB。视频处理在本机完成，文字、关键帧以及无字幕时的音频会发送至百炼。媒体成功处理后删除原视频和临时音频，保留笔记、关键帧和恢复记录；取消或失败时保留素材便于续跑。删除笔记会一并清理该任务文件。
 
-</details>
-
-<details>
-<summary><strong>费用</strong></summary>
-
-### 费用
+## 费用
 
 默认北京 `qwen3.5-flash` 价格核对日为 2026-09-12：单次输入不超过 128K tokens 时，输入 0.2 元 / 百万 tokens，输出 2 元 / 百万 tokens；更长输入使用对应阶梯价格。参见[官方模型说明与价格](https://help.aliyun.com/zh/model-studio/qwen3-5-flash)。
 
 任务记录模型返回的 token 用量，并估算百炼默认模型的文字/图片请求价格。DeepSeek、自定义服务、其他模型或新加坡地域不套用该价格，明确提示费用未计入。语音按秒显示，可填写对应单价；不同语音服务计价规则不一致时请留空。重试、取消后已经发出的请求、无响应请求及连接测试可能产生额外费用，最终以各服务商账单为准。
 
-</details>
-
-<details>
-<summary><strong>开发与测试</strong></summary>
-
-### 开发与测试
+## 开发与测试
 
 ```powershell
 python -m venv .venv
@@ -137,12 +98,7 @@ npm.cmd run build
 
 `probe_sources` 只探测公开视频元数据，不调用模型。`benchmark` 生成 10 / 60 分钟合成视频，使用真实 FFmpeg 和模拟云端响应，写入独立的 `data/benchmark/`；不使用你的 Key、不产生真实 API 费用。其耗时不代表真实模型延迟或准确率。完整结果见 `docs/validation.md`。
 
-</details>
-
-<details>
-<summary><strong>结构与接口</strong></summary>
-
-### 结构与接口
+## 结构与接口
 
 - `src/`：React + TypeScript 网页。
 - `backend/`：FastAPI、SQLite、视频处理队列及多服务商适配器；默认单任务、全局最多 2 个模型请求并发。
@@ -150,5 +106,3 @@ npm.cmd run build
 - `AGENTS.md`、`docs/agents/`：GitHub Issues 和单项目领域文档约定。
 
 接口包括 `GET/PUT /api/settings`、`POST /api/settings/test`、`POST/DELETE /api/cookies`、`GET/POST /api/tasks`、`POST /api/tasks/upload`、`GET/DELETE /api/tasks/{id}`、`POST /api/tasks/{id}/cancel`、`POST /api/tasks/{id}/retry`、`GET /api/tasks/{id}/export?format=md|zip`。交互式接口文档位于 http://127.0.0.1:8765/docs 。服务仅监听回环地址并拒绝外站 Origin，不提供公网部署或多人账户功能。
-
-</details>
